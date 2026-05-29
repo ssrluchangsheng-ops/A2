@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from PIL import Image
 from datetime import datetime
 
@@ -34,27 +33,42 @@ questions = [
         "text": "Which of the following dishes is considered Malaysia's national dish?",
         "options": ["A. Nasi Lemak", "B. Laksa", "C. Satay", "D. Roti Canai"],
         "correct": "A. Nasi Lemak",
-        "image": None
+        "image": None,
+        "type": "A"
     },
     {
         "text": "What is the main protein usually used in a traditional Malaysian Satay?",
         "options": ["A. Beef", "B. Chicken", "C. Fish", "D. Lamb"],
         "correct": "B. Chicken",
-        "image": None
+        "image": None,
+        "type": "A"
     },
     {
         "text": "This dish is known as Laksa Penang. Where did it originate?",
         "options": ["A. Kuala Lumpur", "B. Melaka", "C. Penang", "D. Terengganu"],
         "correct": "C. Penang",
-        "image": "Q3.png"
+        "image": "Q3.png",
+        "type": "B"
     },
     {
         "text": "Satay is a popular grilled meat dish. Its origin is:",
         "options": ["A. Kedah", "B. Johor", "C. Selangor", "D. Perlis"],
         "correct": "B. Johor",
-        "image": "Q4.png"
+        "image": "Q4.png",
+        "type": "B"
     }
 ]
+
+
+# ==================== 辅助函数 ====================
+def reset_quiz_state():
+    """重置答题状态"""
+    st.session_state.quiz_active = False
+    st.session_state.quiz_completed = False
+    st.session_state.current_participant = ""
+    st.session_state.user_answers = [None] * 4
+    st.session_state.current_q_index = 0
+
 
 # ==================== 侧边栏 - 显示统计进度 ====================
 with st.sidebar:
@@ -123,6 +137,8 @@ if st.session_state.quiz_active and not st.session_state.quiz_completed:
             st.image(img, width=300, caption="Food Image")
         except FileNotFoundError:
             st.warning(f"⚠️ Image file '{q['image']}' not found, but you can still answer the question.")
+        except Exception as e:
+            st.warning(f"⚠️ Could not load image: {q['image']}")
 
     # 显示单选选项
     st.write("**Choose your answer:**")
@@ -205,7 +221,7 @@ if st.session_state.quiz_completed:
             already_saved = True
             break
 
-    # 保存当前参与者的记录
+    # 保存当前参与者的记录（最多5人）
     if not already_saved and len(st.session_state.all_participants) < 5:
         st.session_state.all_participants.append([
             st.session_state.current_participant,
@@ -239,20 +255,12 @@ if st.session_state.quiz_completed:
         if len(st.session_state.all_participants) < 5:
             if st.button("👥 Next Participant", use_container_width=True, type="primary"):
                 # 重置答题状态，让下一个人答题
-                st.session_state.quiz_active = False
-                st.session_state.quiz_completed = False
-                st.session_state.current_participant = ""
-                st.session_state.user_answers = [None] * 4
-                st.session_state.current_q_index = 0
+                reset_quiz_state()
                 st.rerun()
 
     with col2:
         if st.button("🏠 Back to Start", use_container_width=True):
-            st.session_state.quiz_active = False
-            st.session_state.quiz_completed = False
-            st.session_state.current_participant = ""
-            st.session_state.user_answers = [None] * 4
-            st.session_state.current_q_index = 0
+            reset_quiz_state()
             st.rerun()
 
     with col3:
@@ -290,20 +298,6 @@ if st.session_state.quiz_completed:
         # 显示所有参与者的成绩矩阵
         st.subheader("👥 Participant Results Matrix")
 
-        # 计算每道题所有参与者的正确率
-        question_stats = []
-        for q_idx in range(len(questions)):
-            correct_count = 0
-            for p in st.session_state.all_participants:
-                if p[2][q_idx] == questions[q_idx]['correct']:
-                    correct_count += 1
-            question_stats.append({
-                "Question": f"Q{q_idx + 1}: {questions[q_idx]['text'][:40]}...",
-                "Correct Count": correct_count,
-                "Total Participants": len(st.session_state.all_participants),
-                "Accuracy": f"{correct_count / len(st.session_state.all_participants) * 100:.1f}%"
-            })
-
         # 创建成绩矩阵表格
         matrix_data = []
         for p in st.session_state.all_participants:
@@ -319,39 +313,59 @@ if st.session_state.quiz_completed:
         df_matrix = pd.DataFrame(matrix_data)
         st.dataframe(df_matrix, use_container_width=True, hide_index=True)
 
-        # 显示题目统计
+        # 计算每道题所有参与者的正确率
         st.subheader("📈 Per-Question Statistics")
+        question_stats = []
+        for q_idx in range(len(questions)):
+            correct_count = 0
+            for p in st.session_state.all_participants:
+                if p[2][q_idx] == questions[q_idx]['correct']:
+                    correct_count += 1
+            question_stats.append({
+                "Question": f"Q{q_idx + 1}: {questions[q_idx]['text'][:40]}...",
+                "Correct Count": correct_count,
+                "Total Participants": len(st.session_state.all_participants),
+                "Accuracy": f"{correct_count / len(st.session_state.all_participants) * 100:.1f}%"
+            })
+
         df_q_stats = pd.DataFrame(question_stats)
         st.dataframe(df_q_stats, use_container_width=True, hide_index=True)
 
         # 计算所有参与者总分数
         total_all_scores = sum(participant_scores)
+        total_possible = len(st.session_state.all_participants) * len(questions)
         st.info(
-            f"📊 **Total marks obtained by all participants for the whole quiz:** {total_all_scores} / {len(participants) * len(questions)}")
+            f"📊 **Total marks obtained by all participants for the whole quiz:** {total_all_scores} / {total_possible}")
 
-        # 绘制柱状图
+        # ========== 使用 Streamlit 原生柱状图（不需要 matplotlib） ==========
         st.subheader("📊 Score Visualization Chart")
-        fig, ax = plt.subplots(figsize=(10, 5))
-        bars = ax.bar(participant_names, participant_scores, color='skyblue', edgecolor='navy', linewidth=1.5)
-        ax.axhline(average_score, color='red', linestyle='--', linewidth=2, label=f'Average = {average_score:.2f}')
-        ax.set_xlabel("Participant Name", fontsize=12)
-        ax.set_ylabel("Score (out of 4)", fontsize=12)
-        ax.set_title("Quiz Scores by Participant", fontsize=14)
-        ax.set_ylim(0, 4.5)
-        ax.legend(loc='upper right')
 
-        # 在柱子上显示数值
-        for bar, score in zip(bars, participant_scores):
-            ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.1,
-                    str(score), ha='center', va='bottom', fontsize=11, fontweight='bold')
+        # 方法1：使用 st.bar_chart（最简单）
+        chart_data = pd.DataFrame({
+            "Participant": participant_names,
+            "Score": participant_scores
+        })
+        chart_data = chart_data.set_index("Participant")
+        st.bar_chart(chart_data, height=400, use_container_width=True)
 
-        st.pyplot(fig)
+        # 显示平均值线（用文字说明）
+        st.caption(f"📌 **Average score line: {average_score:.2f}/4** (shown as reference)")
+
+        # 方法2：额外用表格显示分数对比
+        st.subheader("📋 Score Summary Table")
+        score_summary = pd.DataFrame({
+            "Participant": participant_names,
+            "Score": participant_scores,
+            "Percentage": [f"{s / 4 * 100:.1f}%" for s in participant_scores]
+        })
+        st.dataframe(score_summary, use_container_width=True, hide_index=True)
 
         # 导出数据按钮
         col1, col2 = st.columns(2)
         with col1:
             csv_data = pd.DataFrame(participant_names, columns=["Name"])
             csv_data["Score"] = participant_scores
+            csv_data["Percentage"] = [s / 4 * 100 for s in participant_scores]
             csv = csv_data.to_csv(index=False)
             st.download_button(
                 label="💾 Download Results as CSV",
@@ -377,7 +391,7 @@ if st.session_state.quiz_completed:
 
         # 显示当前已收集的数据
         if len(st.session_state.all_participants) > 0:
-            st.subheader("Current Participants")
+            st.subheader("📋 Current Participants")
             current_df = pd.DataFrame([[p[0], f"{p[1]}/4"] for p in st.session_state.all_participants],
                                       columns=["Name", "Score"])
             st.dataframe(current_df, use_container_width=True, hide_index=True)
