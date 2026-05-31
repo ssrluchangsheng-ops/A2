@@ -1,260 +1,447 @@
-import streamlit as st
-import pandas as pd
-import numpy as np
-from PIL import Image
-from datetime import datetime
+
+import streamlit as st  # 用于创建网页界面
+import pandas as pd  # 用于数据处理和表格显示
+from PIL import Image  # 用于处理图片文件
+import os  # 用于文件操作
 
 # ==================== 页面配置 ====================
-st.set_page_config(page_title="Malaysian Food Quiz", layout="wide")
-st.title("🍜 Malaysia Food Quiz")
+st.set_page_config(
+    page_title="Malaysian Food Quiz",
+    page_icon="🍜",
+    layout="wide"
+)
+
+# ==================== 应用标题 ====================
+st.title("🍜 Malaysian Food Quiz")
 st.header("Test your knowledge about Malaysian Cuisine!")
 
-# ==================== 初始化Session State ====================
-# 存储所有参与者的答题记录
-if "all_participants" not in st.session_state:
-    st.session_state.all_participants = []  # 格式: [name, total_score, answers_list, timestamp]
+# ==================== 常量 ====================
+QUESTIONS_FILE = "Questions.txt"  # 外部题目输入文件
+ANSWERS_FILE = "Answers.txt"  # 外部用户答案输出文件
+REQUIRED_PARTICIPANTS = 5  # 所需的最少参与者人数
 
-# 当前答题状态
-if "quiz_active" not in st.session_state:
-    st.session_state.quiz_active = False
-if "current_participant" not in st.session_state:
-    st.session_state.current_participant = ""
-if "current_q_index" not in st.session_state:
-    st.session_state.current_q_index = 0
-if "user_answers" not in st.session_state:
-    st.session_state.user_answers = [None] * 4  # 4道题
-if "quiz_completed" not in st.session_state:
-    st.session_state.quiz_completed = False
 
-# ==================== 题库定义 ====================
-# 题目格式: [问题文本, 选项列表, 正确答案, 图片路径(可选)]
-questions = [
-    {
-        "text": "Which of the following dishes is considered Malaysia's national dish?",
-        "options": ["A. Nasi Lemak", "B. Laksa", "C. Satay", "D. Roti Canai"],
-        "correct": "A. Nasi Lemak",
-        "image": None,
-        "type": "A"
-    },
-    {
-        "text": "What is the main protein usually used in a traditional Malaysian Satay?",
-        "options": ["A. Beef", "B. Chicken", "C. Fish", "D. Lamb"],
-        "correct": "B. Chicken",
-        "image": None,
-        "type": "A"
-    },
-    {
-        "text": "This dish is known as Laksa Penang. Where did it originate?",
-        "options": ["A. Kuala Lumpur", "B. Melaka", "C. Penang", "D. Terengganu"],
-        "correct": "C. Penang",
-        "image": "Q3.png",
-        "type": "B"
-    },
-    {
-        "text": "Satay is a popular grilled meat dish. Its origin is:",
-        "options": ["A. Kedah", "B. Johor", "C. Selangor", "D. Perlis"],
-        "correct": "B. Johor",
-        "image": "Q4.png",
-        "type": "B"
-    }
-]
+# ==================== 从外部文件加载题目的函数 ====================
+def load_questions_from_file(file_path):
+    """
+    Read questions from external input file.
+
+    File format:
+    Type A: question_number:type:question_text:optionA:optionB:optionC:optionD
+    Type B: question_number:type:question_text:optionA:optionB:optionC:optionD|image_name
+
+    Parameters:
+        file_path (str): Path to the questions file
+
+    Returns:
+        list: List of question dictionaries
+    """
+    questions_list = []
+
+    try:
+        with open(file_path, 'r', encoding='utf-8') as file:
+            for line_num, line in enumerate(file, 1):
+                line = line.strip()
+                if not line:  # 跳过空行
+                    continue
+
+                # 检查是否为带图片的 B 类型（包含 '|'）
+                if '|' in line:
+                    # 分割题目部分和图片部分
+                    question_part, image_name = line.split('|')
+                    parts = question_part.split(':')
+                else:
+                    parts = line.split(':')
+                    image_name = None
+
+                # 提取题目各部分
+                # 格式：编号:类型:题目:选项1:选项2:选项3:选项4
+                if len(parts) >= 7:
+                    question_number = parts[0]
+                    question_type = parts[1]
+                    question_text = parts[2]
+                    options = parts[3:7]  # 获取 4 个选项
+
+                    # 给选项添加字母前缀（A.、B.、C.、D.）
+                    formatted_options = []
+                    letter_prefixes = ['A', 'B', 'C', 'D']
+                    for i, opt in enumerate(options):
+                        formatted_options.append(f"{letter_prefixes[i]}. {opt}")
+
+                    # 第一个选项为正确答案
+                    correct_answer = formatted_options[0]
+
+                    questions_list.append({
+                        "question_number": int(question_number),
+                        "question_text": question_text,
+                        "options": formatted_options,
+                        "correct_answer": correct_answer,
+                        "question_type": question_type,
+                        "image_path": image_name if image_name else None
+                    })
+
+    except FileNotFoundError:
+        st.error(f"❌ Questions file '{file_path}' not found! Please make sure the file exists.")
+        return []
+    except Exception as e:
+        st.error(f"❌ Error reading questions file: {e}")
+        return []
+
+    return questions_list
+
+
+# ==================== 将答案保存到外部文件的函数 ====================
+def save_answers_to_file(participant_name, answers_list, score, questions_data):
+    """
+    Save user answers to external output file.
+
+    Parameters:
+        participant_name (str): Name of the participant
+        answers_list (list): List of answers selected by the participant
+        score (int): Participant's total score
+        questions_data (list): List of question dictionaries
+    """
+    try:
+        # 检查文件是否存在，以确定是否需要写入表头
+        file_exists = os.path.isfile(ANSWERS_FILE)
+
+        with open(ANSWERS_FILE, 'a', encoding='utf-8') as file:
+            # 如果是新文件，写入表头
+            if not file_exists:
+                file.write("=" * 80 + "\n")
+                file.write("MALAYSIAN FOOD KNOWLEDGE QUIZ - PARTICIPANT ANSWERS\n")
+                file.write("=" * 80 + "\n\n")
+
+            # 写入参与者信息
+            file.write(f"Participant: {participant_name}\n")
+            file.write(f"Date: {pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            file.write(f"Total Score: {score}/{len(questions_data)}\n")
+            file.write("-" * 50 + "\n")
+
+            # 写入每道题及其答案
+            for i, q in enumerate(questions_data):
+                file.write(f"Q{i + 1}: {q['question_text']}\n")
+                file.write(f"   Answer: {answers_list[i] if answers_list[i] else 'Not answered'}\n")
+                file.write(f"   Correct: {q['correct_answer']}\n")
+                file.write(f"   Result: {'✓ Correct' if answers_list[i] == q['correct_answer'] else '✗ Wrong'}\n\n")
+
+            file.write("=" * 80 + "\n\n")
+
+        return True
+
+    except Exception as e:
+        st.error(f"❌ Error saving answers to file: {e}")
+        return False
+
+
+# ==================== 显示图片的函数 ====================
+def display_question_image(image_path):
+    """
+    Display image for Type B questions.
+
+    Parameters:
+        image_path (str): Path to the image file
+    """
+    if image_path and os.path.exists(image_path):
+        try:
+            img = Image.open(image_path)
+            st.image(img, width=300, caption="Food Image")
+        except Exception as e:
+            st.warning(f"⚠️ Could not load image: {image_path}")
+    elif image_path:
+        st.warning(f"⚠️ Image file '{image_path}' not found")
+
+
+# ==================== 加载题目 ====================
+questions = load_questions_from_file(QUESTIONS_FILE)
+
+if not questions:
+    st.stop()
+
+# 按题号排序
+questions.sort(key=lambda x: x['question_number'])
+
+# 常量
+TOTAL_QUESTIONS = len(questions)
+
+# ==================== 会话状态初始化 ====================
+# 存储所有参与者的结果：[姓名, 总分, 答案列表]
+if "all_participants_results" not in st.session_state:
+    st.session_state.all_participants_results = []  # 列表类型
+
+# 控制测验流程状态
+if "is_quiz_active" not in st.session_state:
+    st.session_state.is_quiz_active = False  # 布尔类型
+
+# 存储当前参与者的姓名
+if "current_participant_name" not in st.session_state:
+    st.session_state.current_participant_name = ""  # 字符串类型
+
+# 跟踪当前题号索引
+if "current_question_index" not in st.session_state:
+    st.session_state.current_question_index = 0  # 整数类型
+
+# 存储当前参与者的答案
+if "current_participant_answers" not in st.session_state:
+    st.session_state.current_participant_answers = [None] * TOTAL_QUESTIONS  # 列表类型
+
+# 检查当前参与者是否已完成测验
+if "has_quiz_completed" not in st.session_state:
+    st.session_state.has_quiz_completed = False  # 布尔类型
 
 
 # ==================== 辅助函数 ====================
+
 def reset_quiz_state():
-    """重置答题状态"""
-    st.session_state.quiz_active = False
-    st.session_state.quiz_completed = False
-    st.session_state.current_participant = ""
-    st.session_state.user_answers = [None] * 4
-    st.session_state.current_q_index = 0
+    """
+    Reset all quiz-related session state variables.
+    No parameters. No return value.
+    """
+    st.session_state.is_quiz_active = False
+    st.session_state.has_quiz_completed = False
+    st.session_state.current_participant_name = ""
+    st.session_state.current_participant_answers = [None] * TOTAL_QUESTIONS
+    st.session_state.current_question_index = 0
 
 
-# ==================== 侧边栏 - 显示统计进度 ====================
+def calculate_participant_score(answers_list):
+    """
+    Calculate total score for a single participant.
+
+    Parameters:
+        answers_list (list): List of answers selected by the participant
+    Returns:
+        int: Total score (number of correct answers)
+    """
+    score = 0  # 整数类型，初始化为 0
+
+    for i in range(TOTAL_QUESTIONS):  # 遍历每一道题
+        if answers_list[i] == questions[i]["correct_answer"]:  # 检查答案是否正确
+            score += 1  # 答对一题加 1 分
+
+    return score
+
+
+def calculate_per_question_total():
+    """
+    Calculate total marks obtained by all participants for each question.
+
+    Returns:
+        list: List of correct counts per question
+    """
+    per_question_total = [0] * TOTAL_QUESTIONS  # 初始化每道题的正确人数
+
+    for participant in st.session_state.all_participants_results:  # 遍历每位参与者
+        answers_list = participant[2]  # 获取参与者的答案
+        for i in range(TOTAL_QUESTIONS):  # 遍历每道题
+            if answers_list[i] == questions[i]["correct_answer"]:  # 检查是否正确
+                per_question_total[i] += 1  # 正确人数加 1
+
+    return per_question_total
+
+
+def calculate_overall_total():
+    """
+    Calculate total marks obtained by all participants for the whole quiz.
+
+    Returns:
+        int: Sum of all participants' scores
+    """
+    overall_total = 0  # 整数类型，初始化为 0
+
+    for participant in st.session_state.all_participants_results:  # 遍历每位参与者
+        overall_total += participant[1]  # 将参与者的得分加入总分
+
+    return overall_total
+
+
+# ==================== 侧边栏 ====================
 with st.sidebar:
     st.subheader("📊 Quiz Progress")
-    st.write(f"**Participants completed:** {len(st.session_state.all_participants)}/5")
+    st.write(f"**Participants completed:** {len(st.session_state.all_participants_results)}/{REQUIRED_PARTICIPANTS}")
     st.markdown("---")
 
-    if len(st.session_state.all_participants) > 0:
+    # 显示已完成参与者名单
+    if len(st.session_state.all_participants_results) > 0:
         st.subheader("📝 Completed Participants")
-        for idx, p in enumerate(st.session_state.all_participants):
-            st.write(f"{idx + 1}. {p[0]}: **{p[1]}/4**")
+        for index, record in enumerate(st.session_state.all_participants_results):
+            st.write(f"{index + 1}. {record[0]}: **{record[1]}/{TOTAL_QUESTIONS}**")
 
     st.markdown("---")
-    if st.button("🔄 Reset All Data (Admin)"):
-        for key in ["all_participants", "quiz_active", "current_participant",
-                    "current_q_index", "user_answers", "quiz_completed"]:
+
+    # 管理员重置按钮
+    if st.button("🔄 Reset All Data"):
+        for key in ["all_participants_results", "is_quiz_active", "current_participant_name",
+                    "current_question_index", "current_participant_answers", "has_quiz_completed"]:
             if key in st.session_state:
                 del st.session_state[key]
         st.rerun()
 
-# ==================== 主界面 - 输入姓名 ====================
-if not st.session_state.quiz_active and not st.session_state.quiz_completed:
+# ==================== 主界面：姓名输入 ====================
+if not st.session_state.is_quiz_active and not st.session_state.has_quiz_completed:
     st.subheader("👤 Participant Registration")
 
-    # 检查是否已经达到5人上限
-    if len(st.session_state.all_participants) >= 5:
-        st.warning("⚠️ Maximum 5 participants have already completed the quiz! Please view statistics below.")
-        st.session_state.quiz_completed = True
+    # 检查是否已达到最大参与者人数
+    if len(st.session_state.all_participants_results) >= REQUIRED_PARTICIPANTS:
+        st.warning(f"⚠️ {REQUIRED_PARTICIPANTS} participants have already completed the quiz!")
+        st.session_state.has_quiz_completed = True
         st.rerun()
 
-    participant_name = st.text_input("Enter your name:", value="", key="name_input")
+    # 询问用户输入姓名
+    name = st.text_input("Please enter your name:", value="")
 
-    col1, col2 = st.columns(2)
-    with col1:
-        if st.button("🎯 Start Quiz", use_container_width=True):
-            if participant_name.strip():
-                st.session_state.current_participant = participant_name
-                st.session_state.quiz_active = True
-                st.session_state.current_q_index = 0
-                st.session_state.user_answers = [None] * 4
-                st.rerun()
-            else:
-                st.error("❌ Please enter your name!")
-
-    with col2:
-        if len(st.session_state.all_participants) > 0 and st.button("📊 View Statistics", use_container_width=True):
-            st.session_state.quiz_completed = True
+    if st.button("🎯 Start Quiz", use_container_width=True):
+        if name.strip():
+            st.session_state.current_participant_name = name
+            st.session_state.is_quiz_active = True
             st.rerun()
+        else:
+            st.error("❌ Please enter your name!")
 
-# ==================== 答题界面 ====================
-if st.session_state.quiz_active and not st.session_state.quiz_completed:
-    # 显示当前参与者信息
-    st.info(f"👋 **Current Participant:** {st.session_state.current_participant}")
+# ==================== 题目页面 ====================
+if st.session_state.is_quiz_active and not st.session_state.has_quiz_completed:
 
-    # 获取当前题目
-    q = questions[st.session_state.current_q_index]
-    q_num = st.session_state.current_q_index + 1
+    # 显示参与者姓名
+    st.info(f"👋 **Current Participant:** {st.session_state.current_participant_name}")
 
-    st.subheader(f"📌 Question {q_num} of {len(questions)}")
-    st.markdown(f"### {q['text']}")
+    # 获取当前题目数据
+    current_index = st.session_state.current_question_index
+    current_question = questions[current_index]
 
-    # 显示图片（如果是Type B题目）
-    if q['image']:
-        try:
-            img = Image.open(q['image'])
-            st.image(img, width=300, caption="Food Image")
-        except FileNotFoundError:
-            st.warning(f"⚠️ Image file '{q['image']}' not found, but you can still answer the question.")
-        except Exception as e:
-            st.warning(f"⚠️ Could not load image: {q['image']}")
+    # 显示题号和题目
+    st.subheader(f"📌 Question {current_index + 1} of {TOTAL_QUESTIONS}")
+    st.markdown(f"### {current_question['question_text']}")
 
-    # 显示单选选项
-    st.write("**Choose your answer:**")
+    # 为 B 类型题目显示图片
+    if current_question["question_type"] == "B":
+        display_question_image(current_question["image_path"])
+
+    # 显示可点击的答案选项
+    st.write("**Please select your answer:**")
+
+    # 恢复之前已选择的答案（如果有）
     default_index = None
-    if st.session_state.user_answers[st.session_state.current_q_index]:
-        saved = st.session_state.user_answers[st.session_state.current_q_index]
-        for i, opt in enumerate(q['options']):
-            if opt == saved:
+    saved_answer = st.session_state.current_participant_answers[current_index]
+    if saved_answer:
+        for i, option in enumerate(current_question["options"]):
+            if option == saved_answer:
                 default_index = i
                 break
 
+    # 可点击的答案选项（单选按钮）
     selected_answer = st.radio(
-        "Options:",
-        q['options'],
+        label="Answer Options",
+        options=current_question["options"],
         index=default_index,
-        key=f"q_{st.session_state.current_q_index}",
+        key=f"q_{current_index}",
         label_visibility="collapsed"
     )
 
     st.divider()
 
-    # 按钮布局
+    # 导航按钮：上一题、下一题、提交
     col1, col2, col3 = st.columns([1, 1, 1])
 
+    # 上一题按钮
     with col1:
-        # 上一题按钮
-        if st.session_state.current_q_index > 0:
-            if st.button("⬅ Previous Question", use_container_width=True):
-                st.session_state.user_answers[st.session_state.current_q_index] = selected_answer
-                st.session_state.current_q_index -= 1
+        if current_index > 0:
+            if st.button("⬅ Previous", use_container_width=True):
+                st.session_state.current_participant_answers[current_index] = selected_answer
+                st.session_state.current_question_index -= 1
                 st.rerun()
 
+    # 下一题按钮
     with col2:
-        # 下一题按钮（不是最后一题时）
-        if st.session_state.current_q_index < len(questions) - 1:
-            if st.button("Next Question ➡", use_container_width=True):
-                st.session_state.user_answers[st.session_state.current_q_index] = selected_answer
-                st.session_state.current_q_index += 1
+        if current_index < TOTAL_QUESTIONS - 1:
+            if st.button("Next ➡", use_container_width=True):
+                st.session_state.current_participant_answers[current_index] = selected_answer
+                st.session_state.current_question_index += 1
                 st.rerun()
 
+    # 提交按钮（仅在最后一题显示）
     with col3:
-        # 提交按钮（最后一题时）
-        if st.session_state.current_q_index == len(questions) - 1:
+        if current_index == TOTAL_QUESTIONS - 1:
             if st.button("✅ Submit Quiz", use_container_width=True, type="primary"):
-                # 保存最后一题的答案
-                st.session_state.user_answers[st.session_state.current_q_index] = selected_answer
-                st.session_state.quiz_active = False
-                st.session_state.quiz_completed = True
+                st.session_state.current_participant_answers[current_index] = selected_answer
+                st.session_state.is_quiz_active = False
+                st.session_state.has_quiz_completed = True
                 st.rerun()
 
     # 显示进度条
-    progress = (st.session_state.current_q_index + 1) / len(questions)
-    st.progress(progress, text=f"Progress: {int(progress * 100)}%")
+    st.progress((current_index + 1) / TOTAL_QUESTIONS,
+                text=f"Progress: {int((current_index + 1) / TOTAL_QUESTIONS * 100)}%")
 
-# ==================== 结果页面（显示答案和总分） ====================
-if st.session_state.quiz_completed:
-    # 计算当前参与者的分数
-    total_score = 0
-    results_data = []
+    # 提示结束测验并查看结果
+    if current_index == TOTAL_QUESTIONS - 1:
+        st.info("💡 **Tip:** Click 'Submit Quiz' to view your results!")
 
-    for i, q in enumerate(questions):
-        user_ans = st.session_state.user_answers[i]
-        correct_ans = q['correct']
-        is_correct = (user_ans == correct_ans)
+# ==================== 答案页面 ====================
+if st.session_state.has_quiz_completed:
 
-        if is_correct:
-            total_score += 1
+    # 计算当前参与者的总分
+    total_score = calculate_participant_score(st.session_state.current_participant_answers)
 
-        results_data.append({
-            "Question": q['text'][:60] + "..." if len(q['text']) > 60 else q['text'],
-            "Your Answer": user_ans if user_ans else "Not answered",
-            "Correct Answer": correct_ans,
+    # 将答案保存到外部文件（Answers.txt）
+    save_answers_to_file(
+        st.session_state.current_participant_name,
+        st.session_state.current_participant_answers,
+        total_score,
+        questions
+    )
+
+    # 构建结果汇总表
+    results_list = []
+    for i in range(TOTAL_QUESTIONS):
+        is_correct = (st.session_state.current_participant_answers[i] == questions[i]["correct_answer"])
+        question_text = questions[i]["question_text"]
+        if len(question_text) > 50:
+            question_text = question_text[:50] + "..."
+
+        results_list.append({
+            "Question": question_text,
+            "Your Answer": st.session_state.current_participant_answers[i] if
+            st.session_state.current_participant_answers[i] else "Not answered",
+            "Correct Answer": questions[i]["correct_answer"],
             "Result": "✅ Correct" if is_correct else "❌ Wrong"
         })
 
-    # 检查是否已经保存过这个参与者的记录
-    already_saved = False
-    for p in st.session_state.all_participants:
-        if p[0] == st.session_state.current_participant:
-            already_saved = True
+    # 检查参与者是否已保存（防止重复）
+    already_exists = False
+    for record in st.session_state.all_participants_results:
+        if record[0] == st.session_state.current_participant_name:
+            already_exists = True
             break
 
-    # 保存当前参与者的记录（最多5人）
-    if not already_saved and len(st.session_state.all_participants) < 5:
-        st.session_state.all_participants.append([
-            st.session_state.current_participant,
+    # 保存当前参与者记录（如果尚未保存且参与者少于 5 人）
+    if not already_exists and len(st.session_state.all_participants_results) < REQUIRED_PARTICIPANTS:
+        st.session_state.all_participants_results.append([
+            st.session_state.current_participant_name,
             total_score,
-            st.session_state.user_answers.copy(),
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            st.session_state.current_participant_answers.copy()
         ])
 
-    # ========== 显示答题结果页面 ==========
-    st.success(f"🎉 Thank you, {st.session_state.current_participant}!")
+    # ========== 显示答案页面内容 ==========
+    st.success(f"🎉 Thank you, {st.session_state.current_participant_name}!")
 
-    # 显示总分卡片
-    col1, col2, col3 = st.columns([1, 2, 1])
-    with col2:
-        st.markdown(f"""
-        <div style="text-align: center; background-color: #f0f2f6; padding: 20px; border-radius: 10px;">
-            <h2>📊 Your Total Score</h2>
-            <h1 style="color: #4CAF50; font-size: 60px;">{total_score} / {len(questions)}</h1>
-        </div>
-        """, unsafe_allow_html=True)
+    # 显示参与者姓名
+    st.markdown(f"### 👤 Participant: {st.session_state.current_participant_name}")
 
-    # 显示详细结果表格
-    st.subheader("📋 Detailed Results")
-    df_results = pd.DataFrame(results_data)
-    st.dataframe(df_results, use_container_width=True, hide_index=True)
+    # 显示总分
+    st.markdown(f"### 📊 Total Score: **{total_score} / {TOTAL_QUESTIONS}**")
 
-    # 按钮区域
+    # 显示结果汇总表
+    st.subheader("📋 Results Summary Table")
+    st.dataframe(pd.DataFrame(results_list), use_container_width=True, hide_index=True)
+
+    # 显示答案已保存到文件的提示
+    st.success(f"💾 Your answers have been saved to '{ANSWERS_FILE}'")
+
+    # 退出按钮
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        if len(st.session_state.all_participants) < 5:
+        if len(st.session_state.all_participants_results) < REQUIRED_PARTICIPANTS:
             if st.button("👥 Next Participant", use_container_width=True, type="primary"):
-                # 重置答题状态，让下一个人答题
                 reset_quiz_state()
                 st.rerun()
 
@@ -269,129 +456,59 @@ if st.session_state.quiz_completed:
 
     st.markdown("---")
 
-    # ==================== 统计分析（达到5人后显示） ====================
-    if len(st.session_state.all_participants) >= 5:
-        st.header("📊 Statistical Analysis Report")
+    # ==================== 五位参与者完成后显示统计信息 ====================
+    if len(st.session_state.all_participants_results) >= REQUIRED_PARTICIPANTS:
+        st.header("📊 All Participants Results")
 
         # 提取数据
-        participant_names = [p[0] for p in st.session_state.all_participants]
-        participant_scores = [p[1] for p in st.session_state.all_participants]
+        name_list = [p[0] for p in st.session_state.all_participants_results]
+        score_list = [p[1] for p in st.session_state.all_participants_results]
 
-        # 计算统计指标
-        average_score = np.mean(participant_scores)
-        median_score = np.median(participant_scores)
-        mean_score = np.mean(participant_scores)
-        highest_score = max(participant_scores)
-        lowest_score = min(participant_scores)
-
-        # 显示统计卡片
-        col1, col2, col3, col4 = st.columns(4)
-        with col1:
-            st.metric("📈 Average", f"{average_score:.2f} / 4")
-        with col2:
-            st.metric("📊 Median", f"{median_score:.1f} / 4")
-        with col3:
-            st.metric("🎯 Mean", f"{mean_score:.2f} / 4")
-        with col4:
-            st.metric("🏆 Range", f"{lowest_score} - {highest_score}")
-
-        # 显示所有参与者的成绩矩阵
-        st.subheader("👥 Participant Results Matrix")
-
-        # 创建成绩矩阵表格
-        matrix_data = []
-        for p in st.session_state.all_participants:
-            row = {
-                "Participant": p[0],
-                "Total Score": f"{p[1]}/4"
-            }
-            for q_idx in range(len(questions)):
-                is_correct = (p[2][q_idx] == questions[q_idx]['correct'])
-                row[f"Q{q_idx + 1}"] = "✅" if is_correct else "❌"
-            matrix_data.append(row)
-
-        df_matrix = pd.DataFrame(matrix_data)
-        st.dataframe(df_matrix, use_container_width=True, hide_index=True)
-
-        # 计算每道题所有参与者的正确率
-        st.subheader("📈 Per-Question Statistics")
-        question_stats = []
-        for q_idx in range(len(questions)):
-            correct_count = 0
-            for p in st.session_state.all_participants:
-                if p[2][q_idx] == questions[q_idx]['correct']:
-                    correct_count += 1
-            question_stats.append({
-                "Question": f"Q{q_idx + 1}: {questions[q_idx]['text'][:40]}...",
-                "Correct Count": correct_count,
-                "Total Participants": len(st.session_state.all_participants),
-                "Accuracy": f"{correct_count / len(st.session_state.all_participants) * 100:.1f}%"
+        # 1. 计算并显示所有参与者每道题的总得分
+        st.subheader("📊 Total Marks Obtained by All Participants Per Question")
+        per_question_total = calculate_per_question_total()
+        per_question_stats = []
+        for i in range(TOTAL_QUESTIONS):
+            question_preview = questions[i]["question_text"]
+            if len(question_preview) > 40:
+                question_preview = question_preview[:40] + "..."
+            per_question_stats.append({
+                "Question": f"Q{i + 1}: {question_preview}",
+                "Correct Count": per_question_total[i],
+                "Total Participants": len(st.session_state.all_participants_results)
             })
+        st.dataframe(pd.DataFrame(per_question_stats), use_container_width=True, hide_index=True)
 
-        df_q_stats = pd.DataFrame(question_stats)
-        st.dataframe(df_q_stats, use_container_width=True, hide_index=True)
+        # 2. 计算并显示所有参与者在整个测验中的总得分
+        st.subheader("📊 Total Marks Obtained by All Participants for the Whole Quiz")
+        overall_total = calculate_overall_total()
+        max_possible_total = len(st.session_state.all_participants_results) * TOTAL_QUESTIONS
+        st.info(f"**Overall Total: {overall_total} / {max_possible_total}**")
 
-        # 计算所有参与者总分数
-        total_all_scores = sum(participant_scores)
-        total_possible = len(st.session_state.all_participants) * len(questions)
-        st.info(
-            f"📊 **Total marks obtained by all participants for the whole quiz:** {total_all_scores} / {total_possible}")
+        # 3. 显示参与者结果矩阵（显示每道题的答题情况）
+        st.subheader("👥 Participant Results Matrix")
+        matrix = []
+        for record in st.session_state.all_participants_results:
+            row = {"Participant": record[0], "Total Score": f"{record[1]}/{TOTAL_QUESTIONS}"}
+            for i in range(TOTAL_QUESTIONS):
+                is_correct = (record[2][i] == questions[i]["correct_answer"])
+                row[f"Q{i + 1}"] = "✅" if is_correct else "❌"
+            matrix.append(row)
+        st.dataframe(pd.DataFrame(matrix), use_container_width=True, hide_index=True)
 
-        # ========== 使用 Streamlit 原生柱状图（不需要 matplotlib） ==========
-        st.subheader("📊 Score Visualization Chart")
+        # 分数汇总表
+        st.subheader("📋 Score Summary")
+        summary = pd.DataFrame({"Participant": name_list, "Score": score_list})
+        st.dataframe(summary, use_container_width=True, hide_index=True)
 
-        # 方法1：使用 st.bar_chart（最简单）
-        chart_data = pd.DataFrame({
-            "Participant": participant_names,
-            "Score": participant_scores
-        })
-        chart_data = chart_data.set_index("Participant")
-        st.bar_chart(chart_data, height=400, use_container_width=True)
-
-        # 显示平均值线（用文字说明）
-        st.caption(f"📌 **Average score line: {average_score:.2f}/4** (shown as reference)")
-
-        # 方法2：额外用表格显示分数对比
-        st.subheader("📋 Score Summary Table")
-        score_summary = pd.DataFrame({
-            "Participant": participant_names,
-            "Score": participant_scores,
-            "Percentage": [f"{s / 4 * 100:.1f}%" for s in participant_scores]
-        })
-        st.dataframe(score_summary, use_container_width=True, hide_index=True)
-
-        # 导出数据按钮
-        col1, col2 = st.columns(2)
-        with col1:
-            csv_data = pd.DataFrame(participant_names, columns=["Name"])
-            csv_data["Score"] = participant_scores
-            csv_data["Percentage"] = [s / 4 * 100 for s in participant_scores]
-            csv = csv_data.to_csv(index=False)
-            st.download_button(
-                label="💾 Download Results as CSV",
-                data=csv,
-                file_name="quiz_results.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
-        with col2:
-            if st.button("🔄 Reset & Start Over", use_container_width=True):
-                for key in ["all_participants", "quiz_active", "current_participant",
-                            "current_q_index", "user_answers", "quiz_completed"]:
-                    if key in st.session_state:
-                        del st.session_state[key]
-                st.rerun()
+        # 重置按钮
+        if st.button("🔄 Reset & Start Over", use_container_width=True):
+            for key in ["all_participants_results", "is_quiz_active", "current_participant_name",
+                        "current_question_index", "current_participant_answers", "has_quiz_completed"]:
+                if key in st.session_state:
+                    del st.session_state[key]
+            st.rerun()
 
     else:
-        # 未满5人时的提示
-        remaining = 5 - len(st.session_state.all_participants)
-        st.info(
-            f"📌 **{remaining} more participant(s) needed to show statistical analysis.** Please have more people take the quiz.")
-
-        # 显示当前已收集的数据
-        if len(st.session_state.all_participants) > 0:
-            st.subheader("📋 Current Participants")
-            current_df = pd.DataFrame([[p[0], f"{p[1]}/4"] for p in st.session_state.all_participants],
-                                      columns=["Name", "Score"])
-            st.dataframe(current_df, use_container_width=True, hide_index=True)
+        remaining = REQUIRED_PARTICIPANTS - len(st.session_state.all_participants_results)
+        st.info(f"📌 **Need {remaining} more participant(s) to display all results.**")
