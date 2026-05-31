@@ -1,0 +1,4 @@
+1:A:Which of the following dishes is considered Malaysia's national dish?:A. Nasi Lemak:B. Laksa:C. Satay:D. Roti Canai
+2:A:What is the main protein usually used in a traditional Malaysian Satay?:A. Beef:B. Chicken:C. Fish:D. Lamb
+3:B:This dish is known as Laksa Penang. Where did it originate?:A. Kuala Lumpur:B. Melaka:C. Penang:D. Terengganu
+4:B:Satay is a popular grilled meat dish. Its origin is::A. Kedah:B. Johor:C. Selangor:D. Perlis
