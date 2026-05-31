@@ -27,49 +27,42 @@ def load_questions_from_file(file_path):
     Read questions from external input file.
 
     File format:
-    Type A: question_number:type:question_text:optionA:optionB:optionC:optionD
-    Type B: question_number:type:question_text:optionA:optionB:optionC:optionD|image_name
+    number:type:question:correct_position:option1:option2:option3:option4
+    For Type B: number:type:question:correct_position:option1:option2:option3:option4|image_name
 
-    Parameters:
-        file_path (str): Path to the questions file
-
-    Returns:
-        list: List of question dictionaries
+    Example: 1:A:Malaysia national dish?:1:Nasi Lemak:Laksa:Satay:Roti Canai
     """
     questions_list = []
 
     try:
         with open(file_path, 'r', encoding='utf-8') as file:
-            for line_num, line in enumerate(file, 1):
+            for line in file:
                 line = line.strip()
-                if not line:  # 跳过空行
+                if not line:
                     continue
 
-                # 检查是否为带图片的 B 类型（包含 '|'）
+                # Handle Type B with image
+                image_name = None
                 if '|' in line:
-                    # 分割题目部分和图片部分
                     question_part, image_name = line.split('|')
                     parts = question_part.split(':')
                 else:
                     parts = line.split(':')
-                    image_name = None
 
-                # 提取题目各部分
-                # 格式：编号:类型:题目:选项1:选项2:选项3:选项4
-                if len(parts) >= 7:
+                if len(parts) >= 8:  # 现在需要至少8个部分（增加了正确选项位置）
                     question_number = parts[0]
                     question_type = parts[1]
                     question_text = parts[2]
-                    options = parts[3:7]  # 获取 4 个选项
+                    correct_position = int(parts[3])  # 正确选项的位置（1-4）
+                    raw_options = parts[4:8]  # 4个选项，不带前缀
 
-                    # 给选项添加字母前缀（A.、B.、C.、D.）
-                    formatted_options = []
+                    # Add letter prefixes (A., B., C., D.)
                     letter_prefixes = ['A', 'B', 'C', 'D']
-                    for i, opt in enumerate(options):
-                        formatted_options.append(f"{letter_prefixes[i]}. {opt}")
+                    formatted_options = [f"{letter_prefixes[i]}. {opt}" for i, opt in enumerate(raw_options)]
 
-                    # 第一个选项为正确答案
-                    correct_answer = formatted_options[0]
+                    # 根据正确位置获取正确答案
+                    # correct_position 是 1, 2, 3, 4，对应索引 0, 1, 2, 3
+                    correct_answer = formatted_options[correct_position - 1]
 
                     questions_list.append({
                         "question_number": int(question_number),
@@ -81,10 +74,10 @@ def load_questions_from_file(file_path):
                     })
 
     except FileNotFoundError:
-        st.error(f"❌ Questions file '{file_path}' not found! Please make sure the file exists.")
+        st.error(f"❌ Questions file '{file_path}' not found!")
         return []
     except Exception as e:
-        st.error(f"❌ Error reading questions file: {e}")
+        st.error(f"❌ Error parsing questions: {e}")
         return []
 
     return questions_list
